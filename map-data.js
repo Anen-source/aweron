@@ -90,12 +90,12 @@ window.AWERON = {
   ],
   // Sharper painted sections that fade in when zoomed in. x, y and size use the same grid.
   details: [
-    {file:"wolf-lands-detail.jpg",x:370,y:610,size:440,fadeAt:1.6},
-    {file:"academy-detail.jpg",x:450,y:190,size:380,fadeAt:1.6},
-    {file:"orc-forest-detail.jpg",x:120,y:800,size:400,fadeAt:1.6},
-    {file:"cottage-detail.jpg",x:225,y:410,size:360,fadeAt:1.6},
-    {file:"stronghold-detail.jpg",x:360,y:905,size:360,fadeAt:1.6},
-    {file:"tiny-city-detail.jpg",x:535,y:470,size:340,fadeAt:1.6}
+    {file:"wolf-lands-detail.webp",x:370,y:610,size:440,fadeAt:1.6},
+    {file:"academy-detail.webp",x:450,y:190,size:380,fadeAt:1.6},
+    {file:"orc-forest-detail.webp",x:120,y:800,size:400,fadeAt:1.6},
+    {file:"cottage-detail.webp",x:225,y:410,size:360,fadeAt:1.6},
+    {file:"stronghold-detail.webp",x:360,y:905,size:360,fadeAt:1.6},
+    {file:"tiny-city-detail.webp",x:535,y:470,size:340,fadeAt:1.6}
   ],
   // A view limits the markers to one part of the story.
   // These are drafts until the Book 1 plot is rebuilt.
