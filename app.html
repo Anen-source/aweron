@@ -82,6 +82,12 @@ body.night .fb textarea{background:#2a221b;color:#e2d2b0;border-color:#6b5640}
 body.night .old{background:#3b2420}body.night .new{background:#22311f}
 body.night .toc button.on{background:#4a3a2a;color:#f0e2c2}
 /* Website additions */
+.bar{position:sticky;top:0;z-index:40;background:var(--desk);margin:0 0 20px;padding-top:14px;transition:transform .25s ease,box-shadow .25s}
+.bar.stuck{box-shadow:0 8px 14px -8px #000c}
+.bar.away{transform:translateY(-110%);box-shadow:none}
+.toc{top:calc(var(--bar-o,0px) + 12px)!important;max-height:calc(100vh - var(--bar-o,0px) - 24px)!important;transition:top .25s}
+.page{scroll-margin-top:76px}
+@media(max-width:560px){.mode{font-size:0!important;min-width:44px;margin-left:auto}.mode::before{content:'\263E';font-size:22px}.mode[aria-pressed=true]::before{content:'\2600'}}
 html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
 @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{transition:none!important}}
 :focus-visible{outline:2px solid #e0a24a;outline-offset:2px}
@@ -110,7 +116,7 @@ body.night .fbtools button{background:#3a2d22;color:#e2d2b0;border-color:#6b5640
 <a class="skip" href="#main">Skip to the story</a><div id="prog"></div>
 <div class="wrap" id="main">
   <h1>Aweron Story Book</h1>
-  <div class="bar"><div class="tabs" role="tablist"><button data-t="read">Read</button><button data-t="plot">Plotline</button><button data-t="dec">Decisions</button><button data-t="lore">Characters and world</button><button data-t="map">Map</button></div><details class="exp" id="exp"><summary>Export PDF</summary><div class="panel"><div class="quick" role="group" aria-label="Quick picks"><button data-q="ready">Ready to share</button><button data-q="all">Everything</button><button data-q="none">Clear</button></div><input id="expFind" type="search" placeholder="Find a chapter or scene" aria-label="Find a chapter or scene"><div id="expList" class="elist"></div><div class="foot"><label><input type="checkbox" id="expQ" checked> Add a feedback questions page</label><div class="row"><span id="expSum"></span><button id="expGo" class="go">Download PDF</button></div><span id="expMsg" role="status"></span></div></div></details><div class="tools" role="group" aria-label="Text size"><button id="fsDown" aria-label="Smaller text">A&minus;</button><button id="fsUp" aria-label="Larger text">A+</button></div><button id="nightBtn" class="mode" aria-pressed="false">☾ Night mode</button></div>
+  <div class="bar"><div class="tabs" role="tablist"><button data-t="read">Read</button><button data-t="plot">Plotline</button><button data-t="dec">Decisions</button><button data-t="lore">Characters and world</button><button data-t="map">Map</button></div><details class="exp" id="exp"><summary>Export PDF</summary><div class="panel"><div class="quick" role="group" aria-label="Quick picks"><button data-q="ready">Ready to share</button><button data-q="all">Everything</button><button data-q="none">Clear</button></div><input id="expFind" type="search" placeholder="Find a chapter or scene" aria-label="Find a chapter or scene"><div id="expList" class="elist"></div><div class="foot"><label><input type="checkbox" id="expQ" checked> Add a feedback questions page</label><div class="row"><span id="expSum"></span><button id="expGo" class="go">Download PDF</button></div><span id="expMsg" role="status"></span></div></div></details><div class="tools" role="group" aria-label="Text size"><button id="fsDown" aria-label="Smaller text">A&minus;</button><button id="fsUp" aria-label="Larger text">A+</button></div><button id="nightBtn" class="mode" aria-pressed="false" aria-label="Toggle night mode">☾ Night mode</button></div>
   <section id="t-read" hidden><div class="read"><nav class="toc" id="toc" aria-label="Chapters"></nav><div class="page"><div class="in" id="reader"></div></div></div></section>
   <section id="t-plot" hidden><div class="page"><div class="in" id="plot"></div></div></section>
   <section id="t-dec" hidden><div class="page"><div class="in" id="dec"></div></div></section>
@@ -269,6 +275,17 @@ if(window.claude)claude.use('db').then(d=>{if(!d)return;db=d;return d.collection
 /* Website helpers: lazy map picture, on-demand PDF tool, text size, progress, keys, reading position */
 function loadBaseMap(){const i=document.getElementById('baseImg');if(i&&!i.getAttribute('href'))i.setAttribute('href',i.dataset.href)}
 let pdfP=null;function loadPdf(){if(window.jspdf)return Promise.resolve();return pdfP||(pdfP=new Promise((ok,no)=>{const s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';s.onload=ok;s.onerror=()=>{pdfP=null;no()};document.head.appendChild(s)}))}
+(function(){
+/* Tab bar: hides when scrolling down, comes back as soon as you scroll up */
+const bar=document.querySelector('.bar'),exp=document.getElementById('exp');let lastY=scrollY;
+const off=()=>document.documentElement.style.setProperty('--bar-o',bar.classList.contains('away')?'0px':bar.offsetHeight+'px');
+function barScroll(){const y=scrollY,d=y-lastY;bar.classList.toggle('stuck',y>bar.offsetTop+bar.offsetHeight);
+ if(Math.abs(d)<5)return;lastY=y;
+ const keep=exp.open||bar.contains(document.activeElement)&&document.activeElement.matches('input,summary');
+ if(d<0||y<120||keep)bar.classList.remove('away');else bar.classList.add('away');off()}
+addEventListener('scroll',barScroll,{passive:true});addEventListener('resize',off);
+bar.addEventListener('focusin',()=>{bar.classList.remove('away');off()});off();
+})();
 (function(){
 const ls={get(k){try{return localStorage.getItem(k)}catch(e){return null}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
 let fs=+ls.get('fs')||19;const dn=document.getElementById('fsDown'),up=document.getElementById('fsUp');
