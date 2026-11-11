@@ -18,6 +18,7 @@ form{display:grid;gap:12px;text-align:left}
 input[type=password],input[type=text]{width:100%;font:inherit;font-size:18px;padding:12px 74px 12px 14px;min-height:48px;border:1px solid var(--line);border-radius:6px;background:#241a12;color:var(--ink)}
 input:focus-visible,button:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
 .show{position:absolute;right:4px;top:4px;min-height:40px;padding:0 12px;background:none;border:0;color:var(--gold);font:inherit;font-size:15px;cursor:pointer}
+.hint{color:var(--mute);font-size:14px;margin:-4px 0 0}
 .keep{display:flex;gap:10px;align-items:center;color:var(--mute);font-size:16px;min-height:32px;cursor:pointer}
 .keep input{width:20px;height:20px;accent-color:var(--red)}
 .go{font:inherit;font-size:19px;min-height:50px;border:0;border-radius:6px;background:var(--red);color:#fff;cursor:pointer}
@@ -29,32 +30,36 @@ input:focus-visible,button:focus-visible{outline:2px solid var(--gold);outline-o
 @media (prefers-reduced-motion:reduce){.bar i{animation:none;width:100%}}
 </style></head><body><main>
 <h1>Aweron</h1><p class="sub">A story in progress. Enter the password to read.</p>
-<form id="f"><div class="field"><input id="pw" type="password" autocomplete="current-password" placeholder="Password" aria-label="Password" autofocus><button type="button" class="show" id="show" aria-label="Show password">Show</button></div>
+<form id="f"><div class="field"><input id="nm" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="Name" aria-label="Name" style="padding-right:14px"></div><div class="field"><input id="pw" type="password" autocomplete="current-password" placeholder="Password" aria-label="Password" autofocus><button type="button" class="show" id="show" aria-label="Show password">Show</button></div>
+<p class="hint">Readers: use the name and password you were sent.</p>
 <label class="keep"><input type="checkbox" id="keep" checked> Keep me signed in on this device</label>
 <button class="go" id="go">Open</button></form>
 <div class="bar" id="bar" aria-hidden="true"><i></i></div><div id="err" role="alert"></div>
 </main><script>
 // Start downloading while the password is being typed
-const pre={enc:fetch('story.enc.json').then(r=>r.json()),app:fetch('app.html').then(r=>r.text())};
-pre.enc.catch(()=>{});pre.app.catch(()=>{});
-const b64=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
-async function unlock(pw,keep){
-  const d=await pre.enc;
-  const base=await crypto.subtle.importKey('raw',new TextEncoder().encode(pw),'PBKDF2',false,['deriveKey']);
-  const key=await crypto.subtle.deriveKey({name:'PBKDF2',salt:b64(d.salt),iterations:d.iter,hash:'SHA-256'},base,{name:'AES-GCM',length:256},false,['decrypt']);
-  let pt;try{pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:b64(d.iv)},key,b64(d.ct))}catch(_){throw 'bad'}
-  const txt=await new Response(new Blob([pt]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
-  (0,eval)(txt);
-  if(keep)ls.set('aw',pw);else ls.del('aw');
-  const html=await pre.app;
-  document.open();document.write(html);document.close();
+const pre=fetch('site.enc.json').then(r=>r.json());pre.catch(()=>{});
+const b64=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0)),te=new TextEncoder();
+const hex=buf=>[...new Uint8Array(buf)].map(x=>x.toString(16).padStart(2,'0')).join('');
+async function derive(pw,salt,iter){const base=await crypto.subtle.importKey('raw',te.encode(pw),'PBKDF2',false,['deriveBits']);
+  return crypto.subtle.importKey('raw',await crypto.subtle.deriveBits({name:'PBKDF2',salt,iterations:iter,hash:'SHA-256'},base,256),'AES-GCM',false,['decrypt'])}
+async function unlock(name,pw,keep){
+  const d=await pre,n=name.trim().toLowerCase();
+  const id=n?hex(await crypto.subtle.digest('SHA-256',te.encode('u:'+n))).slice(0,16):'admin',slot=d.slots[id];
+  if(!slot){await derive(pw,new Uint8Array(16),d.iter);throw 'bad'}   // same delay as a real attempt
+  let roleKey;try{roleKey=await crypto.subtle.decrypt({name:'AES-GCM',iv:b64(slot.iv)},await derive(pw,b64(slot.salt),d.iter),b64(slot.w))}catch(_){throw 'bad'}
+  const r=d.roles[slot.role],key=await crypto.subtle.importKey('raw',roleKey,'AES-GCM',false,['decrypt']);
+  const pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:b64(r.iv)},key,b64(r.ct));
+  const p=JSON.parse(await new Response(new Blob([pt]).stream().pipeThrough(new DecompressionStream('gzip'))).text());
+  (0,eval)(p.story);
+  if(keep)ls.set('aw',JSON.stringify({n:name,p:pw}));else ls.del('aw');
+  document.open();document.write(p.html);document.close();
 }
 const $=i=>document.getElementById(i),f=$('f'),err=$('err'),go=$('go'),bar=$('bar'),pwi=$('pw');
 const ls={get(k){try{return localStorage.getItem(k)}catch(_){return null}},set(k,v){try{localStorage.setItem(k,v)}catch(_){}},del(k){try{localStorage.removeItem(k)}catch(_){}}};
 function busy(on){go.disabled=on;go.textContent=on?'Opening...':'Open';bar.classList.toggle('on',on)}
 $('show').onclick=()=>{const t=pwi.type==='password';pwi.type=t?'text':'password';$('show').textContent=t?'Hide':'Show'};
 f.addEventListener('submit',async e=>{e.preventDefault();err.textContent='';const pw=pwi.value;if(!pw){err.textContent='Type the password first.';return}busy(true);
-  try{await unlock(pw,$('keep').checked)}
+  try{await unlock($('nm').value,pw,$('keep').checked)}
   catch(x){busy(false);if(x==='bad')ls.del('aw');err.textContent=x==='bad'?'That password did not work.':'Could not load the story. Check your connection and try again.'}});
-const saved=ls.get('aw');if(saved){pwi.value=saved;f.requestSubmit()}
+let saved=ls.get('aw');if(saved){let c;try{c=JSON.parse(saved)}catch(_){c=null}if(!c||typeof c!=='object')c={n:'',p:saved};$('nm').value=c.n||'';pwi.value=c.p||'';if(pwi.value)f.requestSubmit()}
 </script></body></html>
