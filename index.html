@@ -47,6 +47,58 @@ async function makeSlots(cfg,adminKey,adminPw,iter,progress){const slots={admin:
 g.AWCORE={seal,unseal,wrap,unwrap,uid,toB64,fromB64,newKey,ensureKeys,rotateKeys,bookOf,audience,chaptersOf,visible,can,keyringFor,sealBooks,sealApp,sealAdmin,makeSlot,makeSlots,te,td};
 })(typeof globalThis!=='undefined'?globalThis:window);
 </script>
+<script defer>
+/* Parallax3D: a restrained 3D tilt (and optional depth layers) for a picture panel.
+   Markup:  <figure data-parallax data-parallax-tilt="3.5" data-parallax-shift="12">
+              <div data-stage>
+                <div data-depth="0">  ...image...  </div>        <- today: one layer
+                <!-- later: <div data-depth="-0.3">sky</div> <div data-depth="0.1">mountains</div> <div data-depth="0.3">forest</div>
+                            <div data-depth="0.5">castle</div> <div data-depth="0.9">foreground</div> -->
+              </div>
+              <figcaption>...stays still...</figcaption>
+            </figure>
+   - Pointer position (relative to the panel) becomes a target in -1..1. The tilt eases toward it with frame-rate independent
+     smoothing and eases back to rest when the pointer leaves. Circular movement stays smooth because nothing jumps.
+   - data-depth is how far a layer slides against the tilt (0 = none). Negative depths move with the pointer.
+   - Only a requestAnimationFrame loop runs, and only while something is moving. No re-renders, no layout reads on move.
+   - Off for touch and coarse pointers, and for prefers-reduced-motion (live). The stage is overscanned a little so edges never show.
+   To use in React later: new Parallax3D(ref.current) in useEffect, and the returned instance's destroy() in the cleanup. */
+(function(g){
+class Parallax3D{
+ constructor(root,opts){
+  this.root=root;this.stage=root.querySelector('[data-stage]');if(!this.stage)return;
+  const d=root.dataset;
+  this.o=Object.assign({tilt:+d.parallaxTilt||3.5,shift:+d.parallaxShift||12,ease:+d.parallaxEase||.085},opts||{});
+  this.layers=[...root.querySelectorAll('[data-depth]')].map(el=>({el,d:parseFloat(el.dataset.depth)||0})).filter(l=>l.d!==0);
+  this.tx=0;this.ty=0;this.x=0;this.y=0;this.raf=0;this.last=0;this.on=false;this.rect=null;
+  this.move=this.move.bind(this);this.leave=this.leave.bind(this);this.enter=this.enter.bind(this);this.tick=this.tick.bind(this);this.measure=this.measure.bind(this);this.refresh=this.refresh.bind(this);
+  this.mqRM=g.matchMedia('(prefers-reduced-motion: reduce)');this.mqFine=g.matchMedia('(hover: hover) and (pointer: fine)');
+  this.mqRM.addEventListener('change',this.refresh);this.mqFine.addEventListener('change',this.refresh);this.refresh();
+ }
+ refresh(){const want=!this.mqRM.matches&&this.mqFine.matches;if(want&&!this.on)this.enable();else if(!want&&this.on)this.disable()}
+ enable(){this.on=true;this.root.addEventListener('pointerenter',this.enter);this.root.addEventListener('pointermove',this.move);this.root.addEventListener('pointerleave',this.leave);g.addEventListener('resize',this.measure,{passive:true})}
+ disable(){this.on=false;this.root.removeEventListener('pointerenter',this.enter);this.root.removeEventListener('pointermove',this.move);this.root.removeEventListener('pointerleave',this.leave);g.removeEventListener('resize',this.measure);
+  cancelAnimationFrame(this.raf);this.raf=0;this.tx=this.ty=this.x=this.y=0;this.apply()}
+ measure(){this.rect=this.root.getBoundingClientRect()}
+ enter(){this.measure();this.last=0}
+ move(e){if(e.pointerType&&e.pointerType!=='mouse'&&e.pointerType!=='pen')return;const r=this.rect||(this.measure(),this.rect);
+  this.tx=Math.max(-1,Math.min(1,((e.clientX-r.left)/r.width-.5)*2));this.ty=Math.max(-1,Math.min(1,((e.clientY-r.top)/r.height-.5)*2));this.kick()}
+ leave(){this.tx=0;this.ty=0;this.kick()}
+ kick(){if(!this.raf){this.last=0;this.raf=requestAnimationFrame(this.tick)}}
+ tick(t){this.raf=0;const dt=this.last?Math.min(64,t-this.last):16.67;this.last=t;const k=1-Math.pow(1-this.o.ease,dt/16.67);
+  this.x+=(this.tx-this.x)*k;this.y+=(this.ty-this.y)*k;this.apply();
+  if(Math.abs(this.tx-this.x)>.0004||Math.abs(this.ty-this.y)>.0004)this.raf=requestAnimationFrame(this.tick);
+  else{this.x=this.tx;this.y=this.ty;this.apply()}}
+ apply(){const o=this.o,s=this.stage.style;
+  s.setProperty('--rx',(-this.y*o.tilt).toFixed(3)+'deg');s.setProperty('--ry',(this.x*o.tilt).toFixed(3)+'deg');   // the side under the pointer recedes a little
+  for(const l of this.layers)l.el.style.transform='translate3d('+(-this.x*l.d*o.shift).toFixed(2)+'px,'+(-this.y*l.d*o.shift).toFixed(2)+'px,0)'}
+ destroy(){this.disable();this.mqRM.removeEventListener('change',this.refresh);this.mqFine.removeEventListener('change',this.refresh)}
+}
+g.Parallax3D=Parallax3D;
+const init=()=>document.querySelectorAll('[data-parallax]').forEach(el=>{if(!el.__p3d)el.__p3d=new Parallax3D(el)});
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
+})(window);
+</script>
 <style>
 :root{color-scheme:light;--bg:#e9e7dc;--side:#faf9f5;--ink:#1d2030;--ink2:#3e4153;--mute:#8a8a84;--line:#dedccf;--accent:#e5565c;--accent2:#d44a50;--serif:"Newsreader",Georgia,serif;--sans:"Manrope",system-ui,-apple-system,sans-serif}
 *{box-sizing:border-box}
@@ -82,15 +134,17 @@ input:focus{outline:0;border-color:var(--ink);box-shadow:0 0 0 4px rgba(29,32,48
 .bar{height:3px;margin-top:16px;background:#e4e2d6;border-radius:2px;overflow:hidden;opacity:0;transition:opacity .2s}
 .bar.on{opacity:1}.bar i{display:block;height:100%;width:40%;background:var(--accent);animation:slide 1.1s ease-in-out infinite}
 .foot{font-size:12px;color:#a2a198;text-align:center;padding-top:8px}
-.art{position:relative;margin:0;overflow:hidden;background:#1b2420}
-.art img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:50% 50%;animation:drift 26s ease-in-out infinite alternate}
+.art{position:relative;margin:0;overflow:hidden;background:#1b2420;perspective:1100px;perspective-origin:50% 50%;isolation:isolate}
+/* 3D stage: slightly larger than the panel so the edges never show while it tilts; the panel clips it, so nothing overflows */
+.stage{position:absolute;inset:-3.5%;transform-style:preserve-3d;transform:rotateX(var(--rx,0deg)) rotateY(var(--ry,0deg));will-change:transform;backface-visibility:hidden}
+.layer{position:absolute;inset:0;will-change:transform}
+.layer img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:50% 50%;display:block}
 .art::after{content:'';position:absolute;inset:0;background:linear-gradient(180deg,rgba(20,14,8,0) 62%,rgba(20,14,8,.55) 100%)}
 .art figcaption{position:absolute;z-index:2;left:22px;right:22px;bottom:20px;display:flex;justify-content:space-between;gap:12px;align-items:flex-end;color:#fff;text-shadow:0 2px 12px rgba(0,0,0,.55);font-size:13px;line-height:1.3}
 .art figcaption span:last-child{opacity:.8;text-align:right}
 @keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
-@keyframes drift{from{transform:scale(1.04) translate(0,0)}to{transform:scale(1.12) translate(-1.5%,-1%)}}
 @keyframes slide{0%{margin-left:-40%}100%{margin-left:100%}}
-@media (prefers-reduced-motion:reduce){.main,.art img,.bar i{animation:none}.art img{transform:scale(1.04)}.go,input,.show{transition:none}}
+@media (prefers-reduced-motion:reduce){.main,.bar i{animation:none}.go,input,.show{transition:none}.stage{transform:none!important}}
 @media (max-width:860px){
  .shell{grid-template-columns:1fr;grid-template-rows:auto 1fr}
  .art{order:-1;border-radius:0 0 28px 28px;height:30vh;min-height:190px;max-height:300px}
@@ -121,7 +175,12 @@ input:focus{outline:0;border-color:var(--ink);box-shadow:0 0 0 4px rgba(29,32,48
   </main>
   <div class="foot">A private library. Please do not share what you read here.</div>
  </section>
- <figure class="art"><picture><source media="(max-width:860px)" srcset="gate-art-wide.webp"><img src="gate-art.webp" alt="" width="1086" height="1448" fetchpriority="high" decoding="async"></picture><figcaption><span>Stories from the world of Aweron</span><span>The map of Aweron</span></figcaption></figure>
+ <figure class="art" data-parallax data-parallax-tilt="3.5" data-parallax-shift="12">
+  <div class="stage" data-stage>
+   <!-- one layer today. Later, separate images go here as more layers, e.g. data-depth="-0.3" sky, "0.1" mountains, "0.3" forest, "0.5" castle, "0.9" foreground -->
+   <div class="layer" data-depth="0"><picture><source media="(max-width:860px)" srcset="gate-art-wide.webp"><img src="gate-art.webp" alt="" width="1086" height="1448" fetchpriority="high" decoding="async"></picture></div>
+  </div>
+  <figcaption><span>Stories from the world of Aweron</span><span>The map of Aweron</span></figcaption></figure>
 </div>
 <script>
 // Start downloading while the password is being typed
