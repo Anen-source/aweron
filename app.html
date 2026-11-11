@@ -47,7 +47,7 @@ ol,ul{margin:0;padding-left:20px}li{margin-bottom:5px}
 .toc button.on{background:var(--parch2);color:var(--ink)}.toc small{display:block;opacity:.75;font-size:13px}
 .page{background:#f4e9cf;color:#2b1c10;padding:clamp(20px,5vw,56px);font:var(--fs,19px)/1.65 Georgia,serif;box-shadow:0 8px 30px #0009;min-width:0}
 .page .in{max-width:62ch;margin:0 auto}.page h2{font-family:var(--display);font-weight:400;font-size:30px;line-height:1.2;margin:0 0 4px;color:var(--red)}
-.page .meta{font:italic 15px Georgia,serif;color:var(--soft);margin:0 0 24px}.page p{margin:0 0 14px}.brk{text-align:center;margin:22px 0;color:var(--soft)}
+.page .meta{font:italic 15px Georgia,serif;color:var(--soft);margin:0 0 24px}.page p{margin:0 0 14px}.page blockquote.note{margin:28px 0;padding:16px 20px 4px;background:#ecdcb4;border-left:4px solid var(--red);border-radius:0 8px 8px 0;box-shadow:0 2px 8px #0002;font-family:var(--body);font-size:.98em}.page blockquote.note p{margin:0 0 12px}.brk{text-align:center;margin:22px 0;color:var(--soft)}
 .fb{margin-top:30px;padding-top:16px;border-top:1px solid #b89a6a;font-size:16px}
 .fb button,.nav button{font:15px Georgia,serif;min-height:40px;padding:0 12px;margin:0 6px 6px 0;background:#e7d3a6;color:var(--ink);border:1px solid var(--soft);cursor:pointer}
 .fb button.on{background:var(--red);color:#fff;border-color:var(--red)}
@@ -72,7 +72,7 @@ ol,ul{margin:0;padding-left:20px}li{margin-bottom:5px}
 .exp button.go{background:var(--red);color:#fff;border-color:var(--red)}.exp button:disabled{opacity:.6;cursor:default}#expMsg{font-style:italic;font-size:15px}
 .mode{font-family:var(--label);font-size:19px;min-height:44px;padding:0 14px;background:none;color:#e0a24a;border:0;border-bottom:3px solid transparent;cursor:pointer}.mode[aria-pressed=true]{color:#fff}
 /* Night reading: warm dark page, softer text, no white glare */
-body.night .page{background:#1e1813;color:#d6c6a5;box-shadow:0 8px 30px #000c}
+body.night .page{background:#1e1813;color:#d6c6a5;box-shadow:0 8px 30px #000c}body.night .page blockquote.note{background:#2a221b;border-left-color:#9c3a22;box-shadow:none}
 body.night .page h2,body.night .page h1,body.night .page h3{color:#d98a62}
 body.night .page .meta,body.night .brk,body.night .saved,body.night .hist summary{color:#a28b69}
 body.night .fb{border-top-color:#4a3a2a}body.night .item,body.night .chg{border-color:#3d3024}
@@ -236,8 +236,9 @@ setView(location.hash.slice(1)||'all');show('academy');
 const S=window.STORY,$=i=>document.getElementById(i),esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
 const store={get(k){try{return localStorage.getItem(k)}catch(e){return null}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
 const inl=s=>esc(s).replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>').replace(/\*([^*]+)\*/g,'<em>$1</em>');
-function md(t){let o='',ul=false;for(const b of t.split('\n')){const l=b.trim();const li=l.startsWith('- ')||/^\d+\. /.test(l);if(li&&!ul){o+='<ul>';ul=true}if(!li&&ul&&l){o+='</ul>';ul=false}
- if(!l)continue;if(l==='* * *')o+='<div class="brk">* * *</div>';else if(l.startsWith('# '))o+='<h1>'+inl(l.slice(2))+'</h1>';else if(l.startsWith('## '))o+='<h3>'+inl(l.slice(3))+'</h3>';else if(li)o+='<li>'+inl(l.replace(/^(- |\d+\. )/,''))+'</li>';else o+='<p>'+inl(l)+'</p>'}return o+(ul?'</ul>':'')}
+function md(t){let o='',ul=false,nq=false;for(const b of t.split('\n')){const l=b.trim();const li=l.startsWith('- ')||/^\d+\. /.test(l);if(li&&!ul){o+='<ul>';ul=true}if(!li&&ul&&l){o+='</ul>';ul=false}
+ const q=l.startsWith('> ');if((l==='>'||!q)&&nq&&l){o+='</blockquote>';nq=false}if(l==='>')continue;if(q&&!nq){o+='<blockquote class="note">';nq=true}
+ if(!l)continue;if(q)o+='<p>'+inl(l.slice(2))+'</p>';else if(l==='* * *')o+='<div class="brk">* * *</div>';else if(l.startsWith('# '))o+='<h1>'+inl(l.slice(2))+'</h1>';else if(l.startsWith('## '))o+='<h3>'+inl(l.slice(3))+'</h3>';else if(li)o+='<li>'+inl(l.replace(/^(- |\d+\. )/,''))+'</li>';else o+='<p>'+inl(l)+'</p>'}return o+(ul?'</ul>':'')+(nq?'</blockquote>':'')}
 let db=null;const fb={};try{Object.assign(fb,JSON.parse(store.get('fb')||'{}'))}catch(e){}const LABEL={good:'Good',wrong:'Wrong',change:'Change this'};
 function fbHtml(id){const f=fb[id]||{};return '<div class="fb" data-fb="'+id+'">'+Object.keys(LABEL).map(k=>'<button data-v="'+k+'" class="'+(f.verdict===k?'on':'')+'" aria-pressed="'+(f.verdict===k)+'">'+LABEL[k]+'</button>').join('')+'<textarea aria-label="Your note" placeholder="Your note, if any"></textarea> <span class="saved"></span></div>'}
 function fillNotes(root){root.querySelectorAll('[data-fb]').forEach(e=>{const f=fb[e.dataset.fb]||{},a=e.querySelector('textarea');if(document.activeElement!==a)a.value=f.note||''})}
@@ -318,7 +319,7 @@ function buildPdf(jsPDF,chs,withQ,cover){
  centre('The Aweron Series',24,'bold',H*0.33);centre('Book One',14,'normal',H*0.33+30);centre('Anurag Yadav',12,'normal',H*0.33+60);centre('Early draft, shared for feedback.',10,'italic',H-90);centre("Please don't share it further.",10,'italic',H-76);
  d.addPage();const toc=[];
  chs.forEach(c=>{d.addPage();toc.push([c.title,d.internal.getNumberOfPages()]);y=M+30;const head=d.setFont('times','bold').setFontSize(17).splitTextToSize(c.title,W-2*M);head.forEach(l=>{centre(l,17,'bold',y);y+=22});y+=14;
-  c.text.split('\n').map(l=>l.trim()).filter(Boolean).forEach(l=>{if(l==='* * *'){room(30);y+=LH;centre('* * *',SZ,'normal',y);y+=10}else para(l)})});
+  c.text.split('\n').map(l=>l.trim()).filter(Boolean).forEach(l=>{if(l==='>'){y+=6}else if(l==='* * *'){room(30);y+=LH;centre('* * *',SZ,'normal',y);y+=10}else para(l.replace(/^> /,''))})});
  if(withQ){d.addPage();toc.push(['Your feedback',d.internal.getNumberOfPages()]);y=M+30;centre('Your feedback',17,'bold',y);y+=24;['Thank you for reading. Honest answers help far more than polite ones.','1. Where did you get bored or start skimming?','2. Which lines did you have to read twice?','3. Who did you like most, and why?','4. What do you think is going on with Aditya?','5. Would you read on right now? Why or why not?'].forEach(para)}
  d.setPage(off+2);centre('Contents',17,'bold',M+30);let ty=M+70;d.setFontSize(12);
  toc.forEach(([t,pg])=>{d.setFont('times','normal');const num=String(pg),nw=d.getTextWidth(num),lines=d.splitTextToSize(t,W-2*M-nw-24);
