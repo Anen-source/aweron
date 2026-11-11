@@ -99,6 +99,114 @@ const init=()=>document.querySelectorAll('[data-parallax]').forEach(el=>{if(!el.
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
 })(window);
 </script>
+<script defer>
+/* DepthScene: real depth parallax from one painting plus a depth map (WebGL, no libraries).
+   The depth map says how near each pixel is (white = near, black = far). As the pointer moves, every pixel is sampled from a slightly
+   different place depending on its depth, so near things slide more than far things, like looking through a window.
+   A few warm light motes float at their own depths and follow the same rule. Without a pointer (phones, or an idle desktop) the
+   camera drifts very slowly on its own. With prefers-reduced-motion one still frame is drawn.
+   Markup:  <figure data-depth-scene data-strength="0.07" data-focal="0.42">
+              <canvas data-depth-canvas></canvas>
+              <img data-depth-fallback src="art.webp">     <- shown until WebGL is ready, and kept if it is not available
+            </figure>
+   Needs data-img and data-depth (URLs). Optional: data-strength, data-focal (the depth that stays still), data-motes, data-idle (0 to stop idle drift).
+   If anything fails, the panel keeps the plain image (and the CSS tilt). */
+(function(g){
+const VERT='attribute vec2 aPos;varying vec2 vUv;void main(){vUv=aPos*.5+.5;gl_Position=vec4(aPos,0.,1.);}';
+const FRAG=`
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+varying vec2 vUv;uniform sampler2D uImg,uDepth;uniform vec2 uMouse,uVis,uCenter;uniform float uK,uFocal,uAspect,uTime;
+void main(){
+ vec2 base=vec2(vUv.x,1.-vUv.y);
+ vec2 uv=uCenter+(base-.5)*uVis;
+ vec2 off=uMouse*uK*uVis;
+ float d0=texture2D(uDepth,uv).r;
+ vec2 uv1=uv+off*(d0-uFocal);
+ float d1=texture2D(uDepth,uv1).r;
+ vec2 uv2=clamp(uv+off*(d1-uFocal),.001,.999);
+ vec3 col=texture2D(uImg,uv2).rgb;
+ float vg=smoothstep(1.25,.32,length((base-.5)*vec2(uAspect,1.)));
+ col*=mix(.84,1.,vg);
+ gl_FragColor=vec4(col,1.);
+}`;
+const PVERT=`
+attribute vec3 aP;uniform float uTime,uDpr,uK,uFocal;uniform vec2 uMouse;varying float vA;
+void main(){
+ float z=aP.z,sp=.006+.016*z;
+ vec2 p=vec2(fract(aP.x+sin(uTime*.12+aP.y*9.)*.015),fract(aP.y-uTime*sp));
+ p-=uMouse*uK*1.3*(z-uFocal);
+ gl_Position=vec4(p.x*2.-1.,1.-p.y*2.,0.,1.);
+ gl_PointSize=(2.+7.*z)*uDpr;
+ vA=(.22+.5*fract(aP.x*13.37))*(.55+.45*sin(uTime*1.3+aP.y*40.))*smoothstep(0.,.08,p.y)*smoothstep(1.,.92,p.y);
+}`;
+const PFRAG='precision mediump float;varying float vA;void main(){float r=length(gl_PointCoord-.5);float a=smoothstep(.5,.0,r);gl_FragColor=vec4(1.,.80,.52,1.)*a*a*vA;}';
+function shader(gl,type,src){const s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw new Error(gl.getShaderInfoLog(s));return s}
+function program(gl,v,f){const p=gl.createProgram();gl.attachShader(p,shader(gl,gl.VERTEX_SHADER,v));gl.attachShader(p,shader(gl,gl.FRAGMENT_SHADER,f));gl.linkProgram(p);if(!gl.getProgramParameter(p,gl.LINK_STATUS))throw new Error(gl.getProgramInfoLog(p));return p}
+function load(url){return new Promise((ok,no)=>{const i=new Image();i.decoding='async';i.onload=()=>ok(i);i.onerror=()=>no(new Error('load '+url));i.src=url})}
+class DepthScene{
+ constructor(root){
+  this.root=root;this.canvas=root.querySelector('[data-depth-canvas]');if(!this.canvas)return;
+  const d=root.dataset;this.o={k:+d.strength||.07,focal:d.focal==null?.42:+d.focal,motes:d.motes==null?44:+d.motes,idle:d.idle!=='0',img:d.img,depth:d.depth};
+  this.mx=0;this.my=0;this.tx=0;this.ty=0;this.pointer=false;this.t0=performance.now();this.raf=0;this.ready=false;this.visible=true;this.last=0;
+  this.mqRM=g.matchMedia('(prefers-reduced-motion: reduce)');this.mqFine=g.matchMedia('(hover: hover) and (pointer: fine)');this.mqNarrow=g.matchMedia('(max-width: 860px)');
+  this.frame=this.frame.bind(this);this.move=this.move.bind(this);this.leave=this.leave.bind(this);this.resize=this.resize.bind(this);
+  this.init().catch(()=>this.fail());
+ }
+ async init(){
+  const gl=this.gl=this.canvas.getContext('webgl',{antialias:false,alpha:false,powerPreference:'low-power',premultipliedAlpha:false});if(!gl)throw new Error('no webgl');
+  const [img,dep]=await Promise.all([load(this.o.img),load(this.o.depth)]);
+  this.ia=img.naturalWidth/img.naturalHeight;
+  this.prog=program(gl,VERT,FRAG);this.pprog=program(gl,PVERT,PFRAG);
+  const quad=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,quad);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);this.quad=quad;
+  const n=this.o.motes,pts=new Float32Array(n*3);for(let i=0;i<n;i++){pts[i*3]=Math.random();pts[i*3+1]=Math.random();pts[i*3+2]=Math.pow(Math.random(),.8)}
+  this.pbuf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,this.pbuf);gl.bufferData(gl.ARRAY_BUFFER,pts,gl.STATIC_DRAW);
+  const tex=(im,unit)=>{const t=gl.createTexture();gl.activeTexture(gl.TEXTURE0+unit);gl.bindTexture(gl.TEXTURE_2D,t);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGB,gl.RGB,gl.UNSIGNED_BYTE,im);
+   gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);return t};
+  tex(img,0);tex(dep,1);
+  this.U={};for(const k of ['uImg','uDepth','uMouse','uVis','uCenter','uK','uFocal','uAspect','uTime'])this.U[k]=gl.getUniformLocation(this.prog,k);
+  this.PU={};for(const k of ['uTime','uDpr','uK','uFocal','uMouse'])this.PU[k]=gl.getUniformLocation(this.pprog,k);
+  this.canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();this.fail()});
+  this.ro=new ResizeObserver(this.resize);this.ro.observe(this.canvas);this.resize();
+  this.refreshMotion();this.mqRM.addEventListener('change',()=>this.refreshMotion());this.mqFine.addEventListener('change',()=>this.refreshMotion());this.mqNarrow.addEventListener('change',()=>this.resize());
+  if('IntersectionObserver' in g){this.io=new IntersectionObserver(es=>{this.visible=es[0].isIntersecting;if(this.visible)this.kick()});this.io.observe(this.root)}
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)this.kick()});
+  this.draw(0);this.ready=true;this.root.classList.add('depth-on');this.kick();   // first frame is on screen before the plain image is hidden
+ }
+ fail(){this.destroy();this.root.classList.remove('depth-on');this.root.classList.add('depth-off')}
+ refreshMotion(){const still=this.mqRM.matches;this.root.removeEventListener('pointermove',this.move);this.root.removeEventListener('pointerleave',this.leave);
+  if(still){cancelAnimationFrame(this.raf);this.raf=0;this.tx=this.ty=this.mx=this.my=0;this.draw(0);return}
+  if(this.mqFine.matches){this.root.addEventListener('pointermove',this.move);this.root.addEventListener('pointerleave',this.leave)}
+  this.kick()}
+ move(e){if(e.pointerType&&e.pointerType!=='mouse'&&e.pointerType!=='pen')return;const r=this.rect||(this.rect=this.root.getBoundingClientRect());
+  this.tx=Math.max(-1,Math.min(1,((e.clientX-r.left)/r.width-.5)*2));this.ty=Math.max(-1,Math.min(1,((e.clientY-r.top)/r.height-.5)*2));this.pointer=true;this.kick()}
+ leave(){this.pointer=false}
+ kick(){if(!this.raf&&this.ready&&this.visible&&!document.hidden&&!this.mqRM.matches){this.last=0;this.raf=requestAnimationFrame(this.frame)}}
+ resize(){const gl=this.gl,dpr=Math.min(g.devicePixelRatio||1,1.75),w=Math.max(2,Math.round(this.canvas.clientWidth*dpr)),h=Math.max(2,Math.round(this.canvas.clientHeight*dpr));
+  this.dpr=dpr;this.rect=null;if(this.canvas.width!==w||this.canvas.height!==h){this.canvas.width=w;this.canvas.height=h}gl.viewport(0,0,w,h);
+  const ca=w/h,ia=this.ia,zoom=.9,vx=(ca>ia?1:ca/ia)*zoom,vy=(ca>ia?ia/ca:1)*zoom,fx=.5,fy=this.mqNarrow.matches?.2:.5;   // phones show the upper part (sky, mountains, castle)
+  this.vis=[vx,vy];this.center=[fx*(1-vx)+vx/2,fy*(1-vy)+vy/2];this.aspect=ca;if(this.ready&&!this.raf)this.draw(0)}
+ frame(now){this.raf=0;const dt=this.last?Math.min(64,now-this.last):16.67;this.last=now;const t=(now-this.t0)/1000,k=1-Math.pow(1-.07,dt/16.67);
+  let gx=this.tx,gy=this.ty;if(!this.pointer){const a=this.o.idle?1:0;gx=Math.sin(t*.30)*.26*a;gy=Math.cos(t*.21)*.16*a}   // very slow idle drift
+  this.mx+=(gx-this.mx)*k;this.my+=(gy-this.my)*k;this.draw(t);
+  if(!this.mqRM.matches&&this.visible&&!document.hidden)this.raf=requestAnimationFrame(this.frame)}
+ draw(t){const gl=this.gl;if(!gl||gl.isContextLost())return;if(typeof t!=='number')t=0;const U=this.U;
+  gl.disable(gl.BLEND);gl.useProgram(this.prog);gl.bindBuffer(gl.ARRAY_BUFFER,this.quad);const loc=gl.getAttribLocation(this.prog,'aPos');gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+  gl.uniform1i(U.uImg,0);gl.uniform1i(U.uDepth,1);gl.uniform2f(U.uMouse,this.mx,this.my);gl.uniform2f(U.uVis,this.vis[0],this.vis[1]);gl.uniform2f(U.uCenter,this.center[0],this.center[1]);
+  gl.uniform1f(U.uK,this.o.k);gl.uniform1f(U.uFocal,this.o.focal);gl.uniform1f(U.uAspect,this.aspect);gl.uniform1f(U.uTime,t);gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+  if(this.o.motes>0){gl.useProgram(this.pprog);gl.enable(gl.BLEND);gl.blendFunc(gl.ONE,gl.ONE);gl.bindBuffer(gl.ARRAY_BUFFER,this.pbuf);const pl=gl.getAttribLocation(this.pprog,'aP');gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,3,gl.FLOAT,false,0,0);
+   const P=this.PU;gl.uniform1f(P.uTime,this.mqRM.matches?0:t);gl.uniform1f(P.uDpr,this.dpr);gl.uniform1f(P.uK,this.o.k);gl.uniform1f(P.uFocal,this.o.focal);gl.uniform2f(P.uMouse,this.mx,this.my);gl.drawArrays(gl.POINTS,0,this.o.motes);gl.disableVertexAttribArray(pl)}
+  gl.disableVertexAttribArray(loc)}
+ destroy(){cancelAnimationFrame(this.raf);this.raf=0;this.ready=false;try{this.ro&&this.ro.disconnect();this.io&&this.io.disconnect()}catch(e){}this.root.removeEventListener('pointermove',this.move);this.root.removeEventListener('pointerleave',this.leave)}
+}
+g.DepthScene=DepthScene;
+const init=()=>document.querySelectorAll('[data-depth-scene]').forEach(el=>{if(!el.__ds)el.__ds=new DepthScene(el)});
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
+})(window);
+</script>
 <style>
 :root{color-scheme:light;--bg:#e9e7dc;--side:#faf9f5;--ink:#1d2030;--ink2:#3e4153;--mute:#8a8a84;--line:#dedccf;--accent:#e5565c;--accent2:#d44a50;--serif:"Newsreader",Georgia,serif;--sans:"Manrope",system-ui,-apple-system,sans-serif}
 *{box-sizing:border-box}
@@ -139,6 +247,8 @@ input:focus{outline:0;border-color:var(--ink);box-shadow:0 0 0 4px rgba(29,32,48
 .stage{position:absolute;inset:-3.5%;transform-style:preserve-3d;transform:rotateX(var(--rx,0deg)) rotateY(var(--ry,0deg));will-change:transform;backface-visibility:hidden}
 .layer{position:absolute;inset:0;will-change:transform}
 .layer img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:50% 50%;display:block}
+.layer canvas{position:absolute;inset:0;width:100%;height:100%;display:block;opacity:0;transition:opacity .7s ease;z-index:1}
+.art.depth-on canvas{opacity:1}
 .art::after{content:'';position:absolute;inset:0;background:linear-gradient(180deg,rgba(20,14,8,0) 62%,rgba(20,14,8,.55) 100%)}
 .art figcaption{position:absolute;z-index:2;left:22px;right:22px;bottom:20px;display:flex;justify-content:space-between;gap:12px;align-items:flex-end;color:#fff;text-shadow:0 2px 12px rgba(0,0,0,.55);font-size:13px;line-height:1.3}
 .art figcaption span:last-child{opacity:.8;text-align:right}
@@ -175,10 +285,10 @@ input:focus{outline:0;border-color:var(--ink);box-shadow:0 0 0 4px rgba(29,32,48
   </main>
   <div class="foot">A private library. Please do not share what you read here.</div>
  </section>
- <figure class="art" data-parallax data-parallax-tilt="3.5" data-parallax-shift="12">
+ <figure class="art" data-parallax data-parallax-tilt="2.4" data-parallax-shift="0" data-depth-scene data-img="gate-art.webp" data-depth="gate-depth.webp" data-strength="0.09" data-focal="0.42">
   <div class="stage" data-stage>
    <!-- one layer today. Later, separate images go here as more layers, e.g. data-depth="-0.3" sky, "0.1" mountains, "0.3" forest, "0.5" castle, "0.9" foreground -->
-   <div class="layer" data-depth="0"><picture><source media="(max-width:860px)" srcset="gate-art-wide.webp"><img src="gate-art.webp" alt="" width="1086" height="1448" fetchpriority="high" decoding="async"></picture></div>
+   <div class="layer" data-depth="0"><canvas data-depth-canvas aria-hidden="true"></canvas><picture><source media="(max-width:860px)" srcset="gate-art-wide.webp"><img src="gate-art.webp" alt="" width="1086" height="1448" fetchpriority="high" decoding="async"></picture></div>
   </div>
   <figcaption><span>Stories from the world of Aweron</span><span>The map of Aweron</span></figcaption></figure>
 </div>
