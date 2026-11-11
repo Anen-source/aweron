@@ -5,23 +5,62 @@
 <title>Aweron</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27%3E%3Ctext y=%27.9em%27 font-size=%2790%27%3E%F0%9F%90%89%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="preload" as="image" href="gate-art.webp" type="image/webp">
+<link rel="preload" as="image" href="gate-art.webp" type="image/webp" media="(min-width:861px)">
+<script>
+/* AWCORE: one implementation of the encryption and library rules, used by build.mjs (Node) and by the pages (browser).
+   Site format v3: { v, iter, app, admin, books:{id:{card,text}}, slots:{id:{role,salt,iv,w}} }
+   - Each book has two keys: c (its card: title, cover, chapter ids) and t (its text). A reader's slot wraps a keyring {a, c:{}, t:{}}.
+   - Book audience: everyone (all readers), invited (only readers ticked), soon (everyone sees a Coming soon card, nobody reads), hidden (writer only). */
+(function(g){
+const te=new TextEncoder(),td=new TextDecoder(),S=()=>g.crypto.subtle,rnd=n=>g.crypto.getRandomValues(new Uint8Array(n));
+const toB64=u=>{if(typeof Buffer!=='undefined')return Buffer.from(u).toString('base64');let s='';for(let i=0;i<u.length;i+=0x8000)s+=String.fromCharCode.apply(null,u.subarray(i,i+0x8000));return btoa(s)};
+const fromB64=b=>typeof Buffer!=='undefined'?new Uint8Array(Buffer.from(b,'base64')):Uint8Array.from(atob(b),c=>c.charCodeAt(0));
+const keyOf=k=>typeof k==='string'?fromB64(k):k,aes=(raw,use)=>S().importKey('raw',raw,'AES-GCM',false,use);
+async function pbk(pw,salt,iter){const base=await S().importKey('raw',te.encode(pw),'PBKDF2',false,['deriveBits']);return new Uint8Array(await S().deriveBits({name:'PBKDF2',salt,iterations:iter,hash:'SHA-256'},base,256))}
+async function pipe(u8,Ctor,kind){const st=new Ctor(kind),w=st.writable.getWriter();w.write(u8);w.close();return new Uint8Array(await new Response(st.readable).arrayBuffer())}
+const gz=u8=>pipe(u8,CompressionStream,'gzip'),gunz=u8=>pipe(u8,DecompressionStream,'gzip');
+async function seal(key,obj){const iv=rnd(12),ct=new Uint8Array(await S().encrypt({name:'AES-GCM',iv},await aes(keyOf(key),['encrypt']),await gz(te.encode(JSON.stringify(obj)))));return{iv:toB64(iv),ct:toB64(ct)}}
+async function unseal(key,o){return JSON.parse(td.decode(await gunz(new Uint8Array(await S().decrypt({name:'AES-GCM',iv:fromB64(o.iv)},await aes(keyOf(key),['decrypt']),fromB64(o.ct))))))}
+async function wrap(pw,raw,iter,role){const salt=rnd(16),iv=rnd(12),w=new Uint8Array(await S().encrypt({name:'AES-GCM',iv},await aes(await pbk(pw,salt,iter),['encrypt']),raw));return{role,salt:toB64(salt),iv:toB64(iv),w:toB64(w)}}
+async function unwrap(pw,slot,iter){return new Uint8Array(await S().decrypt({name:'AES-GCM',iv:fromB64(slot.iv)},await aes(await pbk(pw,fromB64(slot.salt),iter),['decrypt']),fromB64(slot.w)))}
+async function uid(name){const h=new Uint8Array(await S().digest('SHA-256',te.encode('u:'+name.toLowerCase().trim())));return [...h.slice(0,8)].map(x=>x.toString(16).padStart(2,'0')).join('')}
+const newKey=()=>toB64(rnd(32));
+function ensureKeys(cfg){cfg.keys=cfg.keys||{};cfg.keys.app=cfg.keys.app||newKey();cfg.keys.books=cfg.keys.books||{};for(const b of cfg.meta.books)cfg.keys.books[b.id]=cfg.keys.books[b.id]||{c:newKey(),t:newKey()}}
+function rotateKeys(cfg){cfg.keys={app:newKey(),books:{}};ensureKeys(cfg)}
+/* ---- books ---- */
+const over=(cfg,id)=>((cfg.settings||{}).books||{})[id]||{};
+const bookOf=(cfg,b)=>Object.assign({},b,{title:over(cfg,b.id).title||b.title,series:over(cfg,b.id).series==null?b.series:over(cfg,b.id).series,tagline:over(cfg,b.id).tagline==null?b.tagline:over(cfg,b.id).tagline,description:over(cfg,b.id).description==null?b.description:over(cfg,b.id).description});
+const audience=(cfg,b)=>over(cfg,b.id).audience||(b.id===cfg.meta.defaultBook?'everyone':'hidden');
+const chaptersOf=(story,cfg,b)=>story.chapters.filter(c=>(c.book||cfg.meta.defaultBook)===b.id);
+const visible=(c,cfg)=>{const v=((cfg.settings||{}).chapters||{})[c.id];return v==='show'?true:v==='hide'?false:!/^New/.test(c.status)};
+function can(u,b,cfg){const a=audience(cfg,b);return a==='everyone'?'read':a==='invited'?((u.books||[]).includes(b.id)?'read':null):a==='soon'?'card':null}
+function keyringFor(u,cfg){const r={a:cfg.keys.app,c:{},t:{}};for(const b of cfg.meta.books){const l=can(u,b,cfg);if(l){r.c[b.id]=cfg.keys.books[b.id].c;if(l==='read')r.t[b.id]=cfg.keys.books[b.id].t}}return r}
+async function sealBooks(cfg,story,only){const out={};for(const base of cfg.meta.books){if(only&&!only.includes(base.id))continue;const b=bookOf(cfg,base),chs=chaptersOf(story,cfg,b).filter(c=>visible(c,cfg));
+  const card={id:b.id,title:b.title,series:b.series||'',number:b.number||0,tagline:b.tagline||'',author:b.author||'',description:b.description||'',cover:b.coverUrl,thumb:b.thumbUrl,ids:chs.map(c=>c.id),count:chs.length,words:chs.reduce((n,c)=>n+(c.words||0),0)};
+  out[b.id]={card:await seal(cfg.keys.books[b.id].c,card),text:await seal(cfg.keys.books[b.id].t,{chapters:chs.map(c=>({id:c.id,part:c.part,title:c.title,text:c.text,words:c.words}))})}}return out}
+const sealApp=(cfg,html)=>seal(cfg.keys.app,{html,welcome:(cfg.settings||{}).welcome||'',endNote:(cfg.settings||{}).endNote||''});
+const sealAdmin=(key,payload)=>seal(key,payload);
+const makeSlot=(u,cfg,iter)=>uid(u.name).then(async id=>[id,await wrap(u.password,te.encode(JSON.stringify(keyringFor(u,cfg))),iter,'reader')]);
+async function makeSlots(cfg,adminKey,adminPw,iter,progress){const slots={admin:await wrap(adminPw,keyOf(adminKey),iter,'admin')};let i=0;for(const u of cfg.users){progress&&progress(++i,cfg.users.length);const[id,s]=await makeSlot(u,cfg,iter);slots[id]=s}return slots}
+g.AWCORE={seal,unseal,wrap,unwrap,uid,toB64,fromB64,newKey,ensureKeys,rotateKeys,bookOf,audience,chaptersOf,visible,can,keyringFor,sealBooks,sealApp,sealAdmin,makeSlot,makeSlots,te,td};
+})(typeof globalThis!=='undefined'?globalThis:window);
+</script>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Uncial+Antiqua&family=IM+Fell+English:ital@0;1&display=swap">
 <style>
 :root{color-scheme:light;--cream:#f7f0e1;--paper:#fffaf0;--ink:#2a1b10;--muted:#7a6650;--line:#e0d1b1;--red:#8c2f1c;--red2:#a23a25;--gold:#b9791f}
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
 body{margin:0;min-height:100vh;min-height:100dvh;background:var(--cream);color:var(--ink);font:18px/1.5 "IM Fell English",Georgia,serif}
-.shell{min-height:100vh;min-height:100dvh;display:grid;grid-template-columns:minmax(360px,1fr) minmax(0,1.08fr)}
+.shell{min-height:100vh;min-height:100dvh;display:grid;grid-template-columns:minmax(0,1fr) clamp(300px,29vw,560px)}
 /* form side */
 .panel{position:relative;display:flex;flex-direction:column;padding:28px clamp(24px,5vw,64px);background:radial-gradient(90% 60% at 0% 0%,#fffbf0 0%,rgba(255,251,240,0) 70%),radial-gradient(70% 60% at 100% 100%,#f2e4c6 0%,rgba(242,228,198,0) 70%),var(--cream)}
 .brand{font:400 26px "Uncial Antiqua",Georgia,serif;color:var(--red);letter-spacing:.02em}
-.main{flex:1;display:flex;flex-direction:column;justify-content:center;width:100%;max-width:400px;margin:0 auto;padding:28px 0;animation:rise .7s cubic-bezier(.2,.7,.2,1) both}
+.main{flex:1;display:flex;flex-direction:column;justify-content:center;width:100%;max-width:410px;margin:0 auto;padding:28px 0 56px;text-align:center;animation:rise .7s cubic-bezier(.2,.7,.2,1) both}
 .eyebrow{margin:0 0 10px;font-size:14px;letter-spacing:.16em;text-transform:uppercase;color:var(--gold)}
-h1{margin:0;font:400 clamp(38px,5vw,52px)/1.05 "Uncial Antiqua",Georgia,serif;color:var(--ink)}
-.lead{margin:12px 0 28px;color:var(--muted);font-size:19px}.lead em{color:var(--ink)}
+h1{margin:0;font:400 clamp(38px,4.4vw,50px)/1.05 "Uncial Antiqua",Georgia,serif;color:var(--ink)}
+.lead{margin:12px 0 30px;color:var(--muted);font-size:19px}.lead em{color:var(--ink)}
 form{display:grid;gap:6px}
-label.t{font-size:15px;color:var(--muted);margin-top:8px}
+label.t{font-size:15px;color:var(--muted);margin-top:8px;text-align:left}
 .field{position:relative}
 input[type=text],input[type=password]{width:100%;min-height:52px;padding:12px 16px;font:inherit;font-size:18px;color:var(--ink);background:var(--paper);border:1px solid var(--line);border-radius:12px;transition:border-color .2s,box-shadow .2s,background .2s}
 input[type=text]::placeholder,input[type=password]::placeholder{color:#b3a283}
@@ -30,26 +69,25 @@ input:hover{border-color:#cdbb94}
 input:focus{outline:0;border-color:var(--red);box-shadow:0 0 0 4px rgba(140,47,28,.14);background:#fff}
 .show{position:absolute;right:6px;top:6px;min-height:40px;padding:0 12px;background:none;border:0;border-radius:8px;color:var(--red);font:inherit;font-size:15px;cursor:pointer;transition:background .2s}.show:hover{background:rgba(140,47,28,.08)}
 .show:focus-visible,.go:focus-visible{outline:3px solid rgba(140,47,28,.35);outline-offset:2px}
-.hint{margin:4px 0 0;color:var(--muted);font-size:15px}
-.keep{display:flex;gap:10px;align-items:center;margin-top:14px;color:var(--muted);font-size:16px;min-height:32px;cursor:pointer;user-select:none}
+.hint{margin:6px 0 0;color:var(--muted);font-size:15px}
+.keep{display:flex;gap:10px;align-items:center;justify-content:center;margin-top:16px;color:var(--muted);font-size:16px;min-height:32px;cursor:pointer;user-select:none}
 .keep input{appearance:none;-webkit-appearance:none;width:20px;height:20px;flex:none;margin:0;border:1.5px solid #c9b78f;border-radius:6px;background:var(--paper);display:grid;place-content:center;transition:background .15s,border-color .15s;cursor:pointer}
 .keep input::after{content:'';width:10px;height:6px;border-left:2px solid #fff;border-bottom:2px solid #fff;transform:rotate(-45deg) translate(1px,-1px) scale(0);transition:transform .15s}
 .keep input:checked{background:var(--red);border-color:var(--red)}.keep input:checked::after{transform:rotate(-45deg) translate(1px,-1px) scale(1)}
 .keep input:focus-visible{outline:3px solid rgba(140,47,28,.35);outline-offset:2px}
-.go{margin-top:18px;min-height:54px;border:0;border-radius:12px;background:linear-gradient(180deg,var(--red2),var(--red));color:#fff;font:inherit;font-size:19px;letter-spacing:.02em;cursor:pointer;box-shadow:0 8px 20px rgba(140,47,28,.28);transition:transform .15s,box-shadow .2s,filter .2s}
-.go:hover{transform:translateY(-1px);box-shadow:0 12px 26px rgba(140,47,28,.34);filter:brightness(1.04)}.go:active{transform:none}
+.go{margin-top:20px;min-height:56px;border:0;border-radius:999px;background:var(--ink);color:#fff6e2;font:inherit;font-size:19px;letter-spacing:.02em;cursor:pointer;box-shadow:0 8px 22px rgba(42,27,16,.22);transition:transform .15s,box-shadow .2s,filter .2s}
+.go:hover{transform:translateY(-1px);box-shadow:0 12px 28px rgba(42,27,16,.3);background:#3a2615}.go:active{transform:none}
 .go:disabled{opacity:.75;cursor:default;transform:none}
 #err{min-height:1.6em;margin-top:14px;color:#b3402a;font-size:16px}
 .bar{height:3px;margin-top:16px;background:#eadcc0;border-radius:2px;overflow:hidden;opacity:0;transition:opacity .2s}
 .bar.on{opacity:1}.bar i{display:block;height:100%;width:40%;background:var(--red);animation:slide 1.1s ease-in-out infinite}
 .foot{font-size:14px;color:#9a8a70;text-align:center;padding-top:8px}
 /* picture side */
-.art{position:relative;margin:16px 16px 16px 0;border-radius:26px;overflow:hidden;background:#1b2420;box-shadow:0 20px 60px rgba(60,40,20,.28)}
-.art img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:56% 50%;filter:brightness(1.1) saturate(1.06);animation:drift 26s ease-in-out infinite alternate}
-.art::after{content:'';position:absolute;inset:0;background:linear-gradient(180deg,rgba(247,240,225,.10) 0%,rgba(20,14,8,0) 30%,rgba(20,14,8,.55) 100%)}
-.art figcaption{position:absolute;z-index:2;left:clamp(20px,3vw,40px);right:20px;bottom:clamp(20px,3vw,36px);color:#fff;text-shadow:0 2px 14px rgba(0,0,0,.5)}
-.art q{display:block;font:italic 400 clamp(22px,2.4vw,30px)/1.25 "IM Fell English",Georgia,serif;quotes:none}
-.art cite{display:block;margin-top:8px;font:400 14px "IM Fell English",Georgia,serif;font-style:normal;letter-spacing:.16em;text-transform:uppercase;opacity:.85}
+.art{position:relative;margin:0;overflow:hidden;background:#1b2420}
+.art img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:26% 42%;filter:brightness(1.1) saturate(1.06);animation:drift 26s ease-in-out infinite alternate}
+.art::after{content:'';position:absolute;inset:0;background:linear-gradient(180deg,rgba(20,14,8,0) 55%,rgba(20,14,8,.6) 100%)}
+.art figcaption{position:absolute;z-index:2;left:22px;right:22px;bottom:20px;display:flex;justify-content:space-between;gap:12px;align-items:flex-end;color:#fff;text-shadow:0 2px 12px rgba(0,0,0,.55);font-size:15px;line-height:1.3}
+.art figcaption span:last-child{opacity:.8;text-align:right}
 @keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
 @keyframes drift{from{transform:scale(1.04) translate(0,0)}to{transform:scale(1.12) translate(-1.5%,-1%)}}
 @keyframes slide{0%{margin-left:-40%}100%{margin-left:100%}}
@@ -57,8 +95,8 @@ input:focus{outline:0;border-color:var(--red);box-shadow:0 0 0 4px rgba(140,47,2
 @media (max-width:860px){
  .shell{grid-template-columns:1fr;grid-template-rows:auto 1fr}
  .art{order:-1;margin:0;border-radius:0 0 28px 28px;height:30vh;min-height:190px;max-height:300px}
- .art img{object-position:56% 24%}
- .art figcaption{left:20px;bottom:16px}.art q{font-size:20px}.art cite{display:none}
+ .art img{object-position:50% 30%}
+ .art figcaption{left:18px;right:18px;bottom:14px}.art figcaption span:last-child{display:none}
  .panel{padding:18px 22px 22px}.brand{display:none}
  .main{justify-content:flex-start;padding:18px 0 8px}
  h1{font-size:clamp(34px,9vw,44px)}.lead{margin-bottom:20px}
@@ -68,9 +106,9 @@ input:focus{outline:0;border-color:var(--red);box-shadow:0 0 0 4px rgba(140,47,2
  <section class="panel">
   <div class="brand">Aweron</div>
   <main class="main">
-   <p class="eyebrow">Aweron Legacy &middot; Book One</p>
+   <p class="eyebrow">The Aweron Library</p>
    <h1>Welcome back</h1>
-   <p class="lead">Sign in to keep reading <em>Dragonsong</em>.</p>
+   <p class="lead">Sign in to keep reading.</p>
    <form id="f" novalidate>
     <label class="t" for="nm">Name</label>
     <input id="nm" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="Your name" autofocus>
@@ -82,30 +120,23 @@ input:focus{outline:0;border-color:var(--red);box-shadow:0 0 0 4px rgba(140,47,2
    </form>
    <div class="bar" id="bar" aria-hidden="true"><i></i></div><div id="err" role="alert"></div>
   </main>
-  <div class="foot">An early draft, shared privately. Please do not share it further.</div>
+  <div class="foot">A private library. Please do not share what you read here.</div>
  </section>
- <figure class="art"><img src="gate-art.webp" alt="" width="1400" height="1344" fetchpriority="high" decoding="async"><figcaption><q>Some songs have to be earned.</q><cite>Dragonsong</cite></figcaption></figure>
+ <figure class="art"><picture><source media="(max-width:860px)" srcset="gate-art-wide.webp"><img src="gate-art.webp" alt="" width="900" height="1404" fetchpriority="high" decoding="async"></picture><figcaption><span>Stories from the world of Aweron</span><span>Dragonsong, cover art</span></figcaption></figure>
 </div>
 <script>
 // Start downloading while the password is being typed
 const pre=fetch('site.enc.json').then(r=>r.json());pre.catch(()=>{});
-const b64=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0)),te=new TextEncoder();
-const hex=buf=>[...new Uint8Array(buf)].map(x=>x.toString(16).padStart(2,'0')).join('');
-async function derive(pw,salt,iter){const base=await crypto.subtle.importKey('raw',te.encode(pw),'PBKDF2',false,['deriveBits']);
-  return crypto.subtle.importKey('raw',await crypto.subtle.deriveBits({name:'PBKDF2',salt,iterations:iter,hash:'SHA-256'},base,256),'AES-GCM',false,['decrypt'])}
 async function unlock(name,pw,keep){
   const d=await pre,n=name.trim().toLowerCase();
-  const id=n==='admin-anurag'?'admin':n?hex(await crypto.subtle.digest('SHA-256',te.encode('u:'+n))).slice(0,16):'none',slot=d.slots[id];
-  if(!slot){await derive(pw,new Uint8Array(16),d.iter);throw 'bad'}   // same delay as a real attempt
-  let roleKey;try{roleKey=await crypto.subtle.decrypt({name:'AES-GCM',iv:b64(slot.iv)},await derive(pw,b64(slot.salt),d.iter),b64(slot.w))}catch(_){throw 'bad'}
-  const r=d.roles[slot.role],key=await crypto.subtle.importKey('raw',roleKey,'AES-GCM',false,['decrypt']);
-  const pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:b64(r.iv)},key,b64(r.ct));
-  const p=JSON.parse(await new Response(new Blob([pt]).stream().pipeThrough(new DecompressionStream('gzip'))).text());
-  window.AW_USER={name:name.trim(),role:slot.role,p:pw};
-  window.AW={role:slot.role,view:slot.role,name:name.trim(),pw,d,p,roleKey:new Uint8Array(roleKey),loadedAdminCt:d.roles.admin.ct};
-  (0,eval)(p.story);
+  const id=n==='admin-anurag'?'admin':n?await AWCORE.uid(n):'none',slot=d.slots[id];
+  if(!slot){try{await AWCORE.unwrap(pw,{salt:'AAAAAAAAAAAAAAAAAAAAAA==',iv:'AAAAAAAAAAAAAAAA',w:'AAAA'},d.iter)}catch(_){}throw 'bad'}   // same delay as a real attempt
+  let raw;try{raw=await AWCORE.unwrap(pw,slot,d.iter)}catch(_){throw 'bad'}
+  window.AW_USER={name:name.trim(),role:slot.role,p:pw};let html;
+  if(slot.role==='admin'){const p=await AWCORE.unseal(raw,d.admin);window.AW={role:'admin',view:'admin',name:name.trim(),pw,d,p,roleKey:raw,loadedAdminCt:d.admin.ct};(0,eval)(p.story);html=p.html}
+  else{const ring=JSON.parse(AWCORE.td.decode(raw)),app=await AWCORE.unseal(ring.a,d.app);window.AW={role:'reader',view:'reader',name:name.trim(),pw,d,keys:ring,app};html=app.html}
   if(keep)ls.set('aw',JSON.stringify({n:name,p:pw}));else ls.del('aw');
-  document.open();document.write(p.html);document.close();
+  document.open();document.write(html);document.close();
 }
 const $=i=>document.getElementById(i),f=$('f'),err=$('err'),go=$('go'),bar=$('bar'),pwi=$('pw');
 const ls={get(k){try{return localStorage.getItem(k)}catch(_){return null}},set(k,v){try{localStorage.setItem(k,v)}catch(_){}},del(k){try{localStorage.removeItem(k)}catch(_){}}};
