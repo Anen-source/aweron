@@ -11,6 +11,7 @@
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh;min-height:100dvh;display:grid;place-items:center;background:radial-gradient(ellipse at 50% 30%,#3f2f21,var(--bg) 70%);color:var(--ink);font:18px/1.45 "IM Fell English",Georgia,serif;padding:16px}
 main{width:100%;max-width:380px;text-align:center}
+img.gc{display:block;margin:0 auto 18px;border-radius:4px;box-shadow:0 10px 26px #000a;transform:rotate(-3deg)}
 h1{font:400 clamp(40px,12vw,56px)/1 "Uncial Antiqua",Georgia,serif;margin:0 0 8px;color:var(--gold)}
 p.sub{color:var(--mute);margin:0 0 26px;font-style:italic}
 form{display:grid;gap:12px;text-align:left}
@@ -29,7 +30,7 @@ input:focus-visible,button:focus-visible{outline:2px solid var(--gold);outline-o
 @keyframes slide{0%{margin-left:-40%}100%{margin-left:100%}}
 @media (prefers-reduced-motion:reduce){.bar i{animation:none;width:100%}}
 </style></head><body><main>
-<h1>Aweron</h1><p class="sub">A story in progress. Enter the password to read.</p>
+<img class="gc" src="cover-thumb.webp" width="84" height="134" alt="" aria-hidden="true"><h1>Aweron</h1><p class="sub">A story in progress. Enter the password to read.</p>
 <form id="f"><div class="field"><input id="nm" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="Name" aria-label="Name" style="padding-right:14px"></div><div class="field"><input id="pw" type="password" autocomplete="current-password" placeholder="Password" aria-label="Password" autofocus><button type="button" class="show" id="show" aria-label="Show password">Show</button></div>
 <p class="hint">Readers: use the name and password you were sent.</p>
 <label class="keep"><input type="checkbox" id="keep" checked> Keep me signed in on this device</label>
@@ -44,7 +45,7 @@ async function derive(pw,salt,iter){const base=await crypto.subtle.importKey('ra
   return crypto.subtle.importKey('raw',await crypto.subtle.deriveBits({name:'PBKDF2',salt,iterations:iter,hash:'SHA-256'},base,256),'AES-GCM',false,['decrypt'])}
 async function unlock(name,pw,keep){
   const d=await pre,n=name.trim().toLowerCase();
-  const id=n?hex(await crypto.subtle.digest('SHA-256',te.encode('u:'+n))).slice(0,16):'admin',slot=d.slots[id];
+  const id=n==='admin-anurag'?'admin':n?hex(await crypto.subtle.digest('SHA-256',te.encode('u:'+n))).slice(0,16):'none',slot=d.slots[id];
   if(!slot){await derive(pw,new Uint8Array(16),d.iter);throw 'bad'}   // same delay as a real attempt
   let roleKey;try{roleKey=await crypto.subtle.decrypt({name:'AES-GCM',iv:b64(slot.iv)},await derive(pw,b64(slot.salt),d.iter),b64(slot.w))}catch(_){throw 'bad'}
   const r=d.roles[slot.role],key=await crypto.subtle.importKey('raw',roleKey,'AES-GCM',false,['decrypt']);
@@ -60,10 +61,10 @@ const $=i=>document.getElementById(i),f=$('f'),err=$('err'),go=$('go'),bar=$('ba
 const ls={get(k){try{return localStorage.getItem(k)}catch(_){return null}},set(k,v){try{localStorage.setItem(k,v)}catch(_){}},del(k){try{localStorage.removeItem(k)}catch(_){}}};
 function busy(on){go.disabled=on;go.textContent=on?'Opening...':'Open';bar.classList.toggle('on',on)}
 $('show').onclick=()=>{const t=pwi.type==='password';pwi.type=t?'text':'password';$('show').textContent=t?'Hide':'Show'};
-f.addEventListener('submit',async e=>{e.preventDefault();err.textContent='';const pw=pwi.value;if(!pw){err.textContent='Type the password first.';return}busy(true);
+f.addEventListener('submit',async e=>{e.preventDefault();err.textContent='';const pw=pwi.value;if(!$('nm').value.trim()){err.textContent='Type your name first.';return}if(!pw){err.textContent='Type the password first.';return}busy(true);
   try{await unlock($('nm').value,pw,$('keep').checked)}
   catch(x){busy(false);if(x==='bad')ls.del('aw');err.textContent=x==='bad'?'That password did not work.':'Could not load the story. Check your connection and try again.'}});
 const inv=location.hash.match(/^#in=([\w-]+)$/);let linked=false;
 if(inv){try{const c=JSON.parse(decodeURIComponent(escape(atob(inv[1].replace(/-/g,'+').replace(/_/g,'/')))));$('nm').value=c.n||'';pwi.value=c.p||'';linked=!!pwi.value}catch(_){}history.replaceState(null,'',location.pathname+location.search);if(linked)f.requestSubmit()}
-let saved=linked?null:ls.get('aw');if(saved){let c;try{c=JSON.parse(saved)}catch(_){c=null}if(!c||typeof c!=='object')c={n:'',p:saved};$('nm').value=c.n||'';pwi.value=c.p||'';if(pwi.value)f.requestSubmit()}
+let saved=linked?null:ls.get('aw');if(saved){let c;try{c=JSON.parse(saved)}catch(_){c=null}if(!c||typeof c!=='object')c={n:'',p:saved};$('nm').value=c.n||(c.p?'Admin-Anurag':'');pwi.value=c.p||'';if(pwi.value)f.requestSubmit()}
 </script></body></html>
