@@ -51,6 +51,7 @@ async function unlock(name,pw,keep){
   const pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:b64(r.iv)},key,b64(r.ct));
   const p=JSON.parse(await new Response(new Blob([pt]).stream().pipeThrough(new DecompressionStream('gzip'))).text());
   window.AW_USER={name:name.trim(),role:slot.role,p:pw};
+  window.AW={role:slot.role,view:slot.role,name:name.trim(),pw,d,p,roleKey:new Uint8Array(roleKey),loadedAdminCt:d.roles.admin.ct};
   (0,eval)(p.story);
   if(keep)ls.set('aw',JSON.stringify({n:name,p:pw}));else ls.del('aw');
   document.open();document.write(p.html);document.close();
@@ -62,5 +63,7 @@ $('show').onclick=()=>{const t=pwi.type==='password';pwi.type=t?'text':'password
 f.addEventListener('submit',async e=>{e.preventDefault();err.textContent='';const pw=pwi.value;if(!pw){err.textContent='Type the password first.';return}busy(true);
   try{await unlock($('nm').value,pw,$('keep').checked)}
   catch(x){busy(false);if(x==='bad')ls.del('aw');err.textContent=x==='bad'?'That password did not work.':'Could not load the story. Check your connection and try again.'}});
-let saved=ls.get('aw');if(saved){let c;try{c=JSON.parse(saved)}catch(_){c=null}if(!c||typeof c!=='object')c={n:'',p:saved};$('nm').value=c.n||'';pwi.value=c.p||'';if(pwi.value)f.requestSubmit()}
+const inv=location.hash.match(/^#in=([\w-]+)$/);let linked=false;
+if(inv){try{const c=JSON.parse(decodeURIComponent(escape(atob(inv[1].replace(/-/g,'+').replace(/_/g,'/')))));$('nm').value=c.n||'';pwi.value=c.p||'';linked=!!pwi.value}catch(_){}history.replaceState(null,'',location.pathname+location.search);if(linked)f.requestSubmit()}
+let saved=linked?null:ls.get('aw');if(saved){let c;try{c=JSON.parse(saved)}catch(_){c=null}if(!c||typeof c!=='object')c={n:'',p:saved};$('nm').value=c.n||'';pwi.value=c.p||'';if(pwi.value)f.requestSubmit()}
 </script></body></html>
